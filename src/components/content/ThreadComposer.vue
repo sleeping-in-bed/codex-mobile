@@ -287,6 +287,7 @@
           />
 
           <ComposerDropdown
+            v-if="reasoningOptions.length > 0"
             class="thread-composer-control"
             :model-value="selectedReasoningEffort"
             :options="reasoningOptions"
@@ -396,6 +397,7 @@ import type {
   CollaborationModeOption,
   ReasoningEffort,
   SpeedMode,
+  UiModel,
   UiRateLimitSnapshot,
   UiRateLimitWindow,
   UiThreadTokenUsage,
@@ -437,7 +439,7 @@ const props = defineProps<{
   cwd?: string
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
-  models: string[]
+  models: UiModel[]
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
@@ -585,21 +587,28 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: 'None' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'Extra high' },
-]
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
 
 const modelOptions = computed(() =>
-  props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
+  props.models.map((model) => ({ value: model.id, label: model.displayName || formatModelLabel(model.id) })),
 )
+const selectedModelInfo = computed(() => props.models.find((model) => model.id === props.selectedModel) ?? null)
+const reasoningLabels: Record<string, string> = {
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+  ultra: 'Ultra',
+}
+const reasoningOptions = computed(() => selectedModelInfo.value?.supportedReasoningEfforts?.map((option) => ({
+  value: option.value,
+  label: reasoningLabels[option.value] ?? option.value.trim().replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase()),
+})) ?? [])
 const isPlanModeSelected = computed(() => props.selectedCollaborationMode === 'plan')
 
 const isPlanModeWaitingForModel = computed(() =>

@@ -12,7 +12,6 @@ import type {
   ConfigReadResponse,
   GetAccountRateLimitsResponse,
   ModelListResponse,
-  ReasoningEffort,
   ThreadForkResponse,
   ThreadListResponse,
   ThreadReadResponse,
@@ -55,6 +54,8 @@ import type {
   UiRateLimitWindow,
   UiThreadAutomation,
   UiThreadAutomationStatus,
+  ReasoningEffort,
+  UiModel,
 } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 
@@ -700,10 +701,8 @@ async function enrichThreadMessagesWithFallback(threadId: string, messages: UiMe
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
-  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
-  return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
-    ? (value as ReasoningEffort)
-    : ''
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized ? (normalized as ReasoningEffort) : ''
 }
 
 function normalizeSpeedMode(value: unknown): SpeedMode {
@@ -1813,14 +1812,14 @@ async function resolveCollaborationModeSettings(
     }
   }
 
-  let availableModelIds: string[] = []
+  let availableModels: UiModel[] = []
   try {
-    availableModelIds = await getAvailableModelIds()
+    availableModels = await getAvailableModels()
   } catch {
-    availableModelIds = []
+    availableModels = []
   }
 
-  const fallbackModel = availableModelIds.find((candidate) => candidate.trim().length > 0)?.trim() ?? ''
+  const fallbackModel = availableModels.find((candidate) => candidate.id.trim().length > 0)?.id.trim() ?? ''
   if (fallbackModel) {
     return {
       model: fallbackModel,
@@ -2036,28 +2035,67 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
   return null
 }
 
-export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+function createProviderModel(modelId: string): UiModel {
+  return {
+    id: modelId,
+    displayName: modelId,
+    description: '',
+    supportedReasoningEfforts: null,
+    defaultReasoningEffort: '',
+  }
+}
+
+function normalizeModel(row: unknown): UiModel | null {
+  const record = asRecord(row)
+  if (!record) return null
+
+  const id = readString(record.id) ?? readString(record.model)
+  if (!id) return null
+
+  const supportedReasoningEfforts = Array.isArray(record.supportedReasoningEfforts)
+    ? record.supportedReasoningEfforts.flatMap((option) => {
+      const optionRecord = asRecord(option)
+      const value = normalizeReasoningEffort(optionRecord?.reasoningEffort)
+      return value ? [{ value, description: readString(optionRecord?.description) ?? '' }] : []
+    }).filter((option, index, options) => options.findIndex((candidate) => candidate.value === option.value) === index)
+    : null
+
+  return {
+    id,
+    displayName: readString(record.displayName) ?? id,
+    description: readString(record.description) ?? '',
+    supportedReasoningEfforts,
+    defaultReasoningEffort: normalizeReasoningEffort(record.defaultReasoningEffort),
+  }
+}
+
+export async function getAvailableModels(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<UiModel[]> {
   const shouldIncludeProviderModels = options.includeProviderModels !== false
   const providerModels = shouldIncludeProviderModels ? await fetchProviderModelIds(options.providerId) : null
 
   if (providerModels?.exclusive || options.requireProviderModels) {
-    return providerModels?.ids ?? []
+    return (providerModels?.ids ?? []).map(createProviderModel)
   }
 
   const payload = await callRpc<ModelListResponse>('model/list', {})
-  const ids: string[] = []
+  const models: UiModel[] = []
   for (const row of payload.data) {
-    const candidate = row.id || row.model
-    if (!candidate || ids.includes(candidate)) continue
-    ids.push(candidate)
+    const model = normalizeModel(row)
+    if (!model || models.some((candidate) => candidate.id === model.id)) continue
+    models.push(model)
   }
 
-  if (!shouldIncludeProviderModels || !providerModels) return ids
+  if (!shouldIncludeProviderModels || !providerModels) return models
 
   for (const candidate of providerModels.ids) {
-    if (!ids.includes(candidate)) ids.push(candidate)
+    if (!models.some((model) => model.id === candidate)) models.push(createProviderModel(candidate))
   }
-  return ids
+  return models
+}
+
+export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+  const models = await getAvailableModels(options)
+  return models.map((model) => model.id)
 }
 
 export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {

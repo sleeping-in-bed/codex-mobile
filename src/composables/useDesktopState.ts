@@ -6,7 +6,7 @@ import {
   getAvailableCollaborationModes,
   getAccountRateLimits,
   renameThread,
-  getAvailableModelIds,
+  getAvailableModels,
   getCurrentModelConfig,
   getPendingServerRequests,
   getSkillsList,
@@ -58,6 +58,7 @@ import type {
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
   UiThread,
+  UiModel,
 } from '../types/codex'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 
@@ -91,7 +92,6 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
-const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const MODEL_FALLBACK_ID = 'gpt-5.4-mini'
 const OPENCODE_ZEN_DEFAULT_MODEL = 'big-pickle'
@@ -1423,6 +1423,7 @@ export function useDesktopState() {
   let hasLoadedPersistedQueueState = false
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
+  const availableModels = ref<UiModel[]>([])
   const availableCollaborationModes = ref<CollaborationModeOption[]>([
     { value: 'default', label: 'Default' },
     { value: 'plan', label: 'Plan' },
@@ -1667,6 +1668,29 @@ export function useDesktopState() {
     }
   }
 
+  function readAvailableModel(modelId: string): UiModel | null {
+    const normalizedModelId = modelId.trim()
+    return availableModels.value.find((model) => model.id === normalizedModelId) ?? null
+  }
+
+  function selectSupportedReasoningEffort(modelId: string, preferredEffort: ReasoningEffort | '' = ''): void {
+    const model = readAvailableModel(modelId)
+    const options = model?.supportedReasoningEfforts
+    if (!options || options.length === 0) return
+
+    const optionValues = options.map((option) => option.value)
+    const currentEffort = preferredEffort || selectedReasoningEffort.value
+    if (currentEffort && optionValues.includes(currentEffort)) {
+      selectedReasoningEffort.value = currentEffort
+      return
+    }
+
+    const defaultEffort = model.defaultReasoningEffort && optionValues.includes(model.defaultReasoningEffort)
+      ? model.defaultReasoningEffort
+      : options[0].value
+    selectedReasoningEffort.value = defaultEffort
+  }
+
   function readProviderCompatibleSelectedModel(modelId: string): string {
     const normalizedModelId = modelId.trim()
     if (availableModelIds.value.length === 0) return normalizedModelId
@@ -1715,6 +1739,7 @@ export function useDesktopState() {
     if (threadId.trim() === selectedThreadId.value) {
       selectedModelId.value = readModelIdForThread(selectedThreadId.value)
       ensureAvailableModelIds(selectedModelId.value)
+      selectSupportedReasoningEffort(selectedModelId.value)
     } else {
       ensureAvailableModelIds(normalizedModelId)
     }
@@ -1926,7 +1951,8 @@ export function useDesktopState() {
   }
 
   function setSelectedReasoningEffort(effort: ReasoningEffort | ''): void {
-    if (effort && !REASONING_EFFORT_OPTIONS.includes(effort)) {
+    const supportedEfforts = readAvailableModel(selectedModelId.value)?.supportedReasoningEfforts
+    if (effort && supportedEfforts && !supportedEfforts.some((option) => option.value === effort)) {
       return
     }
     selectedReasoningEffort.value = effort
@@ -1987,16 +2013,18 @@ export function useDesktopState() {
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
       const isProviderBacked = targetProviderId !== 'codex'
       const normalizedSelectedModelId = readModelIdForThread(selectedThreadId.value)
-      const modelIds = await getAvailableModelIds({
+      const models = await getAvailableModels({
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
       })
+      const modelIds = models.map((model) => model.id)
       const providerModelContextId = toProviderModelContextId(targetProviderId)
       const providerScopedModelId = providerModelContextId
         ? normalizeStoredModelId(selectedModelIdByContext.value[providerModelContextId])
         : ''
       const nextModelIds = [...modelIds]
+      const nextModels = [...models]
       if (
         !options?.providerChanged
         && isProviderBacked
@@ -2005,8 +2033,16 @@ export function useDesktopState() {
         && !nextModelIds.includes(normalizedConfiguredModelId)
       ) {
         nextModelIds.push(normalizedConfiguredModelId)
+        nextModels.push({
+          id: normalizedConfiguredModelId,
+          displayName: normalizedConfiguredModelId,
+          description: '',
+          supportedReasoningEfforts: null,
+          defaultReasoningEffort: '',
+        })
       }
       availableModelIds.value = nextModelIds
+      availableModels.value = nextModels
 
       const currentModelInNewList = normalizedSelectedModelId && modelIds.includes(normalizedSelectedModelId)
       if (!normalizedSelectedModelId || !currentModelInNewList || options?.providerChanged) {
@@ -2043,10 +2079,10 @@ export function useDesktopState() {
         saveSelectedModelMap(selectedModelIdByContext.value)
       }
 
-      if (
-        currentConfig.reasoningEffort &&
-        REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
-      ) {
+      const selectedModel = readAvailableModel(selectedModelId.value)
+      if (selectedModel?.supportedReasoningEfforts) {
+        selectSupportedReasoningEffort(selectedModel.id, currentConfig.reasoningEffort)
+      } else if (currentConfig.reasoningEffort) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
       }
       selectedSpeedMode.value = currentConfig.speedMode
@@ -5674,6 +5710,7 @@ export function useDesktopState() {
     selectedThreadId,
     availableCollaborationModes,
     availableModelIds,
+    availableModels,
     selectedCollaborationMode,
     selectedModelId,
     selectedReasoningEffort,
