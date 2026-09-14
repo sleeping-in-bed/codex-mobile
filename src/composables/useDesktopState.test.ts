@@ -16,6 +16,7 @@ const gatewayMocks = vi.hoisted(() => ({
   forkThread: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getAvailableCollaborationModes: vi.fn(),
+  getAvailableModels: vi.fn(),
   getAvailableModelIds: vi.fn(),
   getCurrentModelConfig: vi.fn(),
   getPendingServerRequests: vi.fn(),
@@ -81,6 +82,16 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.getAvailableModels.mockImplementation(async (options?: Record<string, unknown>) => {
+    const modelIds = await gatewayMocks.getAvailableModelIds(options) ?? []
+    return modelIds.map((id: string) => ({
+      id,
+      displayName: id,
+      description: '',
+      supportedReasoningEfforts: null,
+      defaultReasoningEffort: '',
+    }))
+  })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
@@ -1168,6 +1179,66 @@ describe('provider model selection', () => {
     await state.ensureThreadMessagesLoaded('missing-thread', { silent: true })
     await state.loadMessages('missing-thread')
     expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('model-specific reasoning efforts', () => {
+  it('restores and clamps the selected effort from model capabilities', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6-luna',
+      providerId: '',
+      reasoningEffort: 'max',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue([
+      {
+        id: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6-Luna',
+        description: '',
+        supportedReasoningEfforts: [
+          { value: 'low', description: '' },
+          { value: 'medium', description: '' },
+          { value: 'high', description: '' },
+          { value: 'xhigh', description: '' },
+          { value: 'max', description: '' },
+        ],
+        defaultReasoningEffort: 'medium',
+      },
+      {
+        id: 'gpt-5.5',
+        displayName: 'GPT-5.5',
+        description: '',
+        supportedReasoningEfforts: [
+          { value: 'low', description: '' },
+          { value: 'medium', description: '' },
+          { value: 'high', description: '' },
+          { value: 'xhigh', description: '' },
+        ],
+        defaultReasoningEffort: 'medium',
+      },
+    ])
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('max')
+    expect(state.availableModels.value[0]?.supportedReasoningEfforts?.map((option) => option.value)).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ])
+
+    state.setSelectedModelId('gpt-5.5')
+
+    expect(state.selectedReasoningEffort.value).toBe('medium')
   })
 })
 

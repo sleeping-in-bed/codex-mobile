@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
+import { getAvailableModelIds, getAvailableModels, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -55,6 +55,22 @@ describe('startThreadTurn collaboration mode payloads', () => {
       settings: {
         model: 'gpt-5.4',
         reasoning_effort: 'medium',
+        developer_instructions: null,
+      },
+    })
+  })
+
+  it('passes server-defined reasoning efforts through turn/start', async () => {
+    const { requests } = mockRpcFetch()
+
+    await startThreadTurn('thread-1', 'delegate the hard parts', [], 'gpt-6-astra', 'ultra', undefined, [], 'default')
+
+    expect(requests[0].params.effort).toBe('ultra')
+    expect(requests[0].params.collaborationMode).toEqual({
+      mode: 'default',
+      settings: {
+        model: 'gpt-6-astra',
+        reasoning_effort: 'ultra',
         developer_instructions: null,
       },
     })
@@ -172,6 +188,50 @@ describe('getAvailableModelIds', () => {
       includeProviderModels: true,
     })).resolves.toEqual(['gpt-5.5', 'gpt-5.4-mini'])
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
+  })
+})
+
+describe('getAvailableModels', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('preserves model-specific reasoning efforts advertised by app-server', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) as { method: string } : { method: '' }
+      expect(body.method).toBe('model/list')
+      return new Response(JSON.stringify({
+        result: {
+          data: [{
+            id: 'gpt-6-astra',
+            model: 'gpt-6-astra',
+            displayName: 'GPT-6-Astra',
+            description: 'Astra',
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'xhigh', description: 'Extra high reasoning depth' },
+              { reasoningEffort: 'max', description: 'Maximum reasoning depth' },
+              { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+            ],
+            defaultReasoningEffort: 'max',
+          }],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(getAvailableModels({ includeProviderModels: false })).resolves.toEqual([{
+      id: 'gpt-6-astra',
+      displayName: 'GPT-6-Astra',
+      description: 'Astra',
+      supportedReasoningEfforts: [
+        { value: 'xhigh', description: 'Extra high reasoning depth' },
+        { value: 'max', description: 'Maximum reasoning depth' },
+        { value: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+      ],
+      defaultReasoningEffort: 'max',
+    }])
   })
 })
 
