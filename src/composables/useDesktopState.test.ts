@@ -629,6 +629,38 @@ describe('startup request deduplication', () => {
   })
 })
 
+describe('persisted queued messages', () => {
+  it('does not overwrite the backend queue when polling stops and reloads it after restart', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    const queuedMessage = {
+      id: 'q-1',
+      text: 'continue in the background',
+      imageUrls: [],
+      skills: [],
+      fileAttachments: [],
+      collaborationMode: 'default' as const,
+    }
+    gatewayMocks.getThreadQueueState.mockResolvedValue({ 'thread-1': [queuedMessage] })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-1')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(state.selectedThreadQueuedMessages.value).toEqual([queuedMessage])
+
+    state.stopPolling()
+
+    expect(gatewayMocks.setThreadQueueState).not.toHaveBeenCalled()
+
+    gatewayMocks.getThreadQueueState.mockResolvedValue({})
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(2)
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+  })
+})
+
 describe('live error overlay', () => {
   it('shows the default thinking overlay while a selected thread is in progress without activity events', async () => {
     installTestWindow()
