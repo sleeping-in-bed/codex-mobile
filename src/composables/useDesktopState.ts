@@ -4241,9 +4241,9 @@ export function useDesktopState() {
 
   async function loadPersistedQueueStateIfNeeded(): Promise<void> {
     if (hasLoadedPersistedQueueState) return
-    hasLoadedPersistedQueueState = true
     try {
       queuedMessagesByThreadId.value = await getThreadQueueState()
+      hasLoadedPersistedQueueState = true
     } catch {
       // Backend queue state is optional during startup.
     }
@@ -5638,7 +5638,7 @@ export function useDesktopState() {
     persistedUserMessageByThreadId.value = {}
     queuedMessagesByThreadId.value = {}
     queueProcessingByThreadId.value = {}
-    persistQueueState()
+    hasLoadedPersistedQueueState = false
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
   }
